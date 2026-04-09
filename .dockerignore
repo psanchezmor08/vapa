@@ -1,0 +1,60 @@
+# Node modules
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+
+# Build
+build/
+dist/
+*.egg-info/
+
+# Tests
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Environment variables (se manejan con docker-compose)
+.env.local
+.env.development
+.env.test
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+
+# Data
+data/
+*.db
+
+# Misc
+.emergent/
+test_reports/
+memory/

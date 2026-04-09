@@ -1,0 +1,93 @@
+import React, { useState } from 'react';
+import { toolsAPI } from '../../services/api';
+
+const PortAnalyzer = () => {
+  const [port, setPort] = useState('');
+  const [result, setResult] = useState(null);
+
+  const handleAnalyze = async () => {
+    if (!port) return;
+    try {
+      const data = await toolsAPI.analyzePort(parseInt(port));
+      setResult(data);
+    } catch (err) {
+      console.error('Error analyzing port:', err);
+    }
+  };
+
+  const commonPorts = [
+    { port: 80, name: 'HTTP' },
+    { port: 443, name: 'HTTPS' },
+    { port: 22, name: 'SSH' },
+    { port: 21, name: 'FTP' },
+    { port: 3306, name: 'MySQL' },
+    { port: 5432, name: 'PostgreSQL' },
+    { port: 27017, name: 'MongoDB' },
+    { port: 6379, name: 'Redis' },
+  ];
+
+  return (
+    <div className="max-w-2xl mx-auto">
+      <div className="bg-gray-800/50 backdrop-blur-sm border border-lime-500/20 rounded-lg p-6">
+        <h2 className="text-2xl font-bold text-lime-400 mb-4">Analizador de Puertos</h2>
+        
+        <div className="space-y-4">
+          <div>
+            <label className="block text-lime-300 mb-2">Número de Puerto</label>
+            <input
+              type="number"
+              value={port}
+              onChange={(e) => setPort(e.target.value)}
+              placeholder="80"
+              min="1"
+              max="65535"
+              className="w-full bg-gray-900 border border-lime-500/30 rounded px-4 py-2 text-white focus:outline-none focus:border-lime-400"
+            />
+          </div>
+          
+          <button
+            onClick={handleAnalyze}
+            disabled={!port}
+            className="w-full bg-lime-500 hover:bg-lime-600 text-gray-900 font-bold py-3 px-6 rounded transition disabled:opacity-50"
+          >
+            Analizar Puerto
+          </button>
+
+          {result && (
+            <div className="bg-gray-900 border border-lime-500/30 rounded p-4 space-y-2">
+              <div>
+                <p className="text-lime-300 text-sm">Puerto</p>
+                <p className="text-white font-mono text-xl">{result.port}</p>
+              </div>
+              <div>
+                <p className="text-lime-300 text-sm">Servicio</p>
+                <p className="text-white font-mono text-lg">{result.service}</p>
+              </div>
+              <div>
+                <p className="text-lime-300 text-sm">Descripción</p>
+                <p className="text-white">{result.description}</p>
+              </div>
+            </div>
+          )}
+          
+          <div className="bg-gray-900/50 border border-lime-500/20 rounded p-4">
+            <p className="text-lime-300 font-bold mb-2">Puertos Comunes</p>
+            <div className="grid grid-cols-2 gap-2">
+              {commonPorts.map((p) => (
+                <button
+                  key={p.port}
+                  onClick={() => setPort(p.port.toString())}
+                  className="bg-gray-800 hover:bg-gray-700 text-white py-2 px-3 rounded text-sm transition"
+                >
+                  {p.port} - {p.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default PortAnalyzer;

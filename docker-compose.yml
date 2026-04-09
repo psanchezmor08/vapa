@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  # MongoDB Database
+  mongodb:
+    image: mongo:7.0
+    container_name: vapa-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_DATABASE: vapa_production
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - vapa-network
+  # Backend FastAPI
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: vapa-backend
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      - MONGO_URL=mongodb://mongodb:27017
+      - DB_NAME=vapa_production
+      - CORS_ORIGINS=https://vapa.es
+      - SECRET_KEY=${SECRET_KEY:-vapa-secret-key-change-in-production}
+    depends_on:
+      - mongodb
+    networks:
+      - vapa-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/api/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Frontend React + Nginx
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - REACT_APP_BACKEND_URL=${REACT_APP_BACKEND_URL:-http://localhost:8001}
+    container_name: vapa-frontend
+    restart: unless-stopped
+    ports:
+      - "7000:80"
+    depends_on:
+      - backend
+    networks:
+      - vapa-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  vapa-network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+    driver: local
