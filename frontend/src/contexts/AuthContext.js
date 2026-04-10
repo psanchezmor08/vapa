@@ -45,12 +45,12 @@ export const AuthProvider = ({ children }) => {
     setUser(null);
   };
 
-  const isAdmin = () => {
-    return user && (user.role === 'admin' || user.role === 'editor');
-  };
+  const isAdmin = () => user?.role === 'admin';
+  const isEditor = () => user?.role === 'admin' || user?.role === 'editor';
+  const isViewer = () => user?.role === 'admin' || user?.role === 'editor' || user?.role === 'viewer';
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, loading, isAdmin }}>
+    <AuthContext.Provider value={{ user, login, logout, loading, isAdmin, isEditor, isViewer }}>
       {children}
     </AuthContext.Provider>
   );

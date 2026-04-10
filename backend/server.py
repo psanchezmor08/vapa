@@ -228,11 +228,15 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         raise HTTPException(status_code=401, detail="User not found")
     return User(**user)
 
-async def get_current_active_admin(current_user: User = Depends(get_current_user)) -> User:
+async def get_current_active_editor(current_user: User = Depends(get_current_user)) -> User:
     if current_user.role not in ["admin", "editor"]:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
+        raise HTTPException(status_code=403, detail="No tienes permisos suficientes")
     return current_user
 
+async def get_current_active_admin(current_user: User = Depends(get_current_user)) -> User:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Se requiere rol de administrador")
+    return current_user
 # ============= AUTH ROUTES =============
 
 @api_router.post("/auth/register", response_model=UserResponse)
@@ -335,16 +339,28 @@ async def get_me(current_user: User = Depends(get_current_user)):
 # ============= BLOG ROUTES =============
 
 @api_router.get("/blog/posts", response_model=List[BlogPost])
-async def get_blog_posts(published_only: bool = True):
-    query = {"published": True} if published_only else {}
+async def get_blog_posts(published_only: bool = True, credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False))):
+    user_role = None
+    if credentials:
+        try:
+            payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+            user_id = payload.get("sub")
+            if user_id:
+                u = await db.users.find_one({"id": user_id}, {"_id": 0})
+                if u:
+                    user_role = u.get("role")
+        except:
+            pass
+    if user_role in ["admin", "editor", "viewer"]:
+        query = {} if not published_only else {"published": True}
+    else:
+        query = {"published": True}
     posts = await db.blog_posts.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
-    
     for post in posts:
         if isinstance(post['created_at'], str):
             post['created_at'] = datetime.fromisoformat(post['created_at'])
         if isinstance(post['updated_at'], str):
             post['updated_at'] = datetime.fromisoformat(post['updated_at'])
-    
     return posts
 
 @api_router.get("/blog/posts/{post_id}", response_model=BlogPost)
@@ -361,7 +377,7 @@ async def get_blog_post(post_id: str):
     return BlogPost(**post)
 
 @api_router.post("/blog/posts", response_model=BlogPost)
-async def create_blog_post(post_data: BlogPostCreate, current_user: User = Depends(get_current_active_admin)):
+async def create_blog_post(post_data: BlogPostCreate, current_user: User = Depends(get_current_active_editor)):
     # Generate slug from title
     slug = post_data.title.lower().replace(" ", "-").replace(":", "").replace("?", "")
     
@@ -382,7 +398,7 @@ async def create_blog_post(post_data: BlogPostCreate, current_user: User = Depen
     return post
 
 @api_router.put("/blog/posts/{post_id}", response_model=BlogPost)
-async def update_blog_post(post_id: str, post_data: BlogPostUpdate, current_user: User = Depends(get_current_active_admin)):
+async def update_blog_post(post_id: str, post_data: BlogPostUpdate, current_user: User = Depends(get_current_active_editor)):
     post = await db.blog_posts.find_one({"id": post_id}, {"_id": 0})
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
@@ -403,7 +419,7 @@ async def update_blog_post(post_id: str, post_data: BlogPostUpdate, current_user
     return BlogPost(**updated_post)
 
 @api_router.delete("/blog/posts/{post_id}")
-async def delete_blog_post(post_id: str, current_user: User = Depends(get_current_active_admin)):
+async def delete_blog_post(post_id: str, current_user: User = Depends(get_current_active_editor)):
     result = await db.blog_posts.delete_one({"id": post_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Post not found")

@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { blogAPI, usersAPI } from '../services/api';
 
 const AdminPage = () => {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, isEditor } = useAuth();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('posts');
   const [posts, setPosts] = useState([]);
@@ -19,9 +19,9 @@ const AdminPage = () => {
   const [message, setMessage] = useState('');
 
   useEffect(() => {
-    if (!user || !isAdmin()) { navigate('/login'); return; }
+    if (!user || !isEditor()) { navigate('/login'); return; }
     loadPosts();
-    loadUsers();
+    if (isAdmin()) loadUsers();
   }, [user]);
 
   const loadPosts = async () => {
@@ -103,7 +103,7 @@ const AdminPage = () => {
     setTimeout(() => setMessage(''), 3000);
   };
 
-  if (!user || !isAdmin()) return null;
+  if (!user || !isEditor()) return null;
 
   return (
     <div className="min-h-screen">
@@ -126,7 +126,9 @@ const AdminPage = () => {
 
           <div className="flex gap-2 mb-6 border-b border-lime-500/20 pb-4">
             <button onClick={() => setActiveTab('posts')} className={`px-4 py-2 rounded font-bold transition ${activeTab === 'posts' ? 'bg-lime-500 text-gray-900' : 'bg-gray-700 text-white hover:bg-gray-600'}`}>Posts</button>
-            <button onClick={() => setActiveTab('users')} className={`px-4 py-2 rounded font-bold transition ${activeTab === 'users' ? 'bg-lime-500 text-gray-900' : 'bg-gray-700 text-white hover:bg-gray-600'}`}>Usuarios</button>
+            {isAdmin() && (
+              <button onClick={() => setActiveTab('users')} className={`px-4 py-2 rounded font-bold transition ${activeTab === 'users' ? 'bg-lime-500 text-gray-900' : 'bg-gray-700 text-white hover:bg-gray-600'}`}>Usuarios</button>
+            )}
             <button onClick={() => setActiveTab('mypassword')} className={`px-4 py-2 rounded font-bold transition ${activeTab === 'mypassword' ? 'bg-lime-500 text-gray-900' : 'bg-gray-700 text-white hover:bg-gray-600'}`}>Mi Contraseña</button>
           </div>
 
@@ -190,7 +192,7 @@ const AdminPage = () => {
             </div>
           )}
 
-          {activeTab === 'users' && (
+          {activeTab === 'users' && isAdmin() && (
             <div>
               <h2 className="text-2xl font-bold text-lime-400 mb-6">Gestión de Usuarios</h2>
 
@@ -208,9 +210,9 @@ const AdminPage = () => {
                   <div>
                     <label className="block text-lime-300 mb-2">Rol</label>
                     <select value={newUser.role} onChange={(e) => setNewUser({ ...newUser, role: e.target.value })} className="w-full bg-gray-900 border border-lime-500/30 rounded px-4 py-2 text-white focus:outline-none focus:border-lime-400">
-                      <option value="viewer">Viewer</option>
-                      <option value="editor">Editor</option>
-                      <option value="admin">Admin</option>
+                      <option value="viewer">Viewer — ver borradores</option>
+                      <option value="editor">Editor — editar posts</option>
+                      <option value="admin">Admin — control total</option>
                     </select>
                   </div>
                 </div>
@@ -223,7 +225,7 @@ const AdminPage = () => {
                     <div className="flex flex-col md:flex-row md:items-center gap-4">
                       <div className="flex-1">
                         <p className="text-lime-300 font-bold">{u.email}</p>
-                        <p className="text-gray-400 text-sm">Rol: <span className="text-lime-400">{u.role}</span></p>
+                        <p className="text-gray-400 text-sm">Rol: <span className={`font-bold ${u.role === 'admin' ? 'text-red-400' : u.role === 'editor' ? 'text-yellow-400' : 'text-lime-400'}`}>{u.role}</span></p>
                       </div>
                       <div className="flex gap-2 items-center">
                         <input type="password" placeholder="Nueva contraseña" value={resetPasswords[u.id] || ''} onChange={(e) => setResetPasswords({ ...resetPasswords, [u.id]: e.target.value })} className="bg-gray-900 border border-lime-500/30 rounded px-3 py-1 text-white text-sm focus:outline-none focus:border-lime-400 w-40" />
