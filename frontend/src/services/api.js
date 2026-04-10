@@ -58,6 +58,39 @@ export const blogAPI = {
   }
 };
 
+export const usersAPI = {
+  getUsers: async () => {
+    const response = await axios.get(`${API}/users`, {
+      headers: getAuthHeader()
+    });
+    return response.data;
+  },
+  createUser: async (email, password, role = 'viewer') => {
+    const response = await axios.post(`${API}/users`, { email, password, role }, {
+      headers: getAuthHeader()
+    });
+    return response.data;
+  },
+  deleteUser: async (id) => {
+    const response = await axios.delete(`${API}/users/${id}`, {
+      headers: getAuthHeader()
+    });
+    return response.data;
+  },
+  resetPassword: async (id, new_password) => {
+    const response = await axios.put(`${API}/users/${id}/password`, { new_password }, {
+      headers: getAuthHeader()
+    });
+    return response.data;
+  },
+  changeMyPassword: async (current_password, new_password) => {
+    const response = await axios.put(`${API}/auth/change-password`, { current_password, new_password }, {
+      headers: getAuthHeader()
+    });
+    return response.data;
+  }
+};
+
 export const toolsAPI = {
   calculateSubnet: async (ip_address, cidr) => {
     const response = await axios.post(`${API}/tools/subnet-calculator`, { ip_address, cidr });

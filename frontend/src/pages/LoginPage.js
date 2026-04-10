@@ -74,10 +74,6 @@ const LoginPage = () => {
             </button>
           </form>
           
-          <div className="mt-6 text-center text-sm text-gray-400">
-            <p>Credenciales por defecto:</p>
-            <p className="text-lime-300 mt-1">admin@vapa.es / admin123</p>
-          </div>
         </div>
       </div>
     </div>

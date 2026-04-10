@@ -1,32 +1,16 @@
-# VAPA.es Backend Dependencies - Optimizado para Docker
-# Solo dependencias esenciales
-
-# Framework
 fastapi==0.110.1
 uvicorn[standard]==0.25.0
-
-# Base de datos
 motor==3.3.1
 pymongo==4.5.0
-
-# Validación
 pydantic>=2.6.4
 email-validator>=2.2.0
-
-# Autenticación y Seguridad
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
 bcrypt==4.1.3
 pyjwt>=2.10.1
 cryptography>=42.0.8
-
-# Utilidades
 python-dotenv>=1.0.1
 python-multipart>=0.0.9
-
-# Herramientas
 qrcode[pil]>=7.4.2
-Pillow>=10.0.0
-
-# HTTP Client
+Pillow==10.3.0
 requests>=2.31.0

@@ -168,6 +168,16 @@ class UnitConverterOutput(BaseModel):
 class UUIDGeneratorOutput(BaseModel):
     uuid: str
 
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
+
+class PasswordReset(BaseModel):
+    new_password: str
+
+class UserUpdate(BaseModel):
+    role: Optional[str] = None
+
 class URLEncoderInput(BaseModel):
     text: str
     encode: bool = True
@@ -264,6 +274,59 @@ async def login(user_data: UserLogin):
         token_type="bearer",
         user=UserResponse(**user)
     )
+@api_router.get("/users", response_model=List[UserResponse])
+async def get_users(current_user: User = Depends(get_current_active_admin)):
+    users = await db.users.find({}, {"_id": 0}).to_list(100)
+    result = []
+    for u in users:
+        if isinstance(u['created_at'], str):
+            u['created_at'] = datetime.fromisoformat(u['created_at'])
+        result.append(UserResponse(**u))
+    return result
+
+@api_router.post("/users", response_model=UserResponse)
+async def create_user(user_data: UserCreate, current_user: User = Depends(get_current_active_admin)):
+    existing_user = await db.users.find_one({"email": user_data.email})
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    user = User(
+        email=user_data.email,
+        password_hash=get_password_hash(user_data.password),
+        role=user_data.role
+    )
+    doc = user.model_dump()
+    doc['created_at'] = doc['created_at'].isoformat()
+    await db.users.insert_one(doc)
+    return UserResponse(**user.model_dump())
+
+@api_router.delete("/users/{user_id}")
+async def delete_user(user_id: str, current_user: User = Depends(get_current_active_admin)):
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="No puedes eliminarte a ti mismo")
+    result = await db.users.delete_one({"id": user_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    return {"message": "Usuario eliminado"}
+
+@api_router.put("/users/{user_id}/password")
+async def reset_user_password(user_id: str, data: PasswordReset, current_user: User = Depends(get_current_active_admin)):
+    result = await db.users.update_one(
+        {"id": user_id},
+        {"$set": {"password_hash": get_password_hash(data.new_password)}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    return {"message": "Contraseña restablecida"}
+
+@api_router.put("/auth/change-password")
+async def change_my_password(data: PasswordChange, current_user: User = Depends(get_current_user)):
+    if not verify_password(data.current_password, current_user.password_hash):
+        raise HTTPException(status_code=400, detail="Contraseña actual incorrecta")
+    await db.users.update_one(
+        {"id": current_user.id},
+        {"$set": {"password_hash": get_password_hash(data.new_password)}}
+    )
+    return {"message": "Contraseña cambiada correctamente"}
 
 @api_router.get("/auth/me", response_model=UserResponse)
 async def get_me(current_user: User = Depends(get_current_user)):
