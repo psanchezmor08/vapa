@@ -133,6 +133,26 @@ export const toolsAPI = {
   analyzePort: async (port) => {
     const response = await axios.post(`${API}/tools/port-analyzer`, { port });
     return response.data;
+  },
+  scanPorts: async (host, ports = "common") => {
+    const response = await axios.post(`${API}/tools/port-scan`, { host, ports });
+    return response.data;
+  },
+  ping: async (host, count = 4) => {
+    const response = await axios.post(`${API}/tools/ping`, { host, count });
+    return response.data;
+  },
+  ipv4ToIpv6: async (ip) => {
+    const response = await axios.post(`${API}/tools/ipv4-to-ipv6`, { ip });
+    return response.data;
+  },
+  dnsLookup: async (domain, record_type = "A") => {
+    const response = await axios.post(`${API}/tools/dns-lookup`, { domain, record_type });
+    return response.data;
+  },
+  vlsm: async (network, subnets) => {
+    const response = await axios.post(`${API}/tools/vlsm`, { network, subnets });
+    return response.data;
   }
 };
 

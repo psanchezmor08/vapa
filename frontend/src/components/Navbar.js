@@ -11,7 +11,7 @@ const Navbar = () => {
         <div className="flex items-center justify-between">
           <Link to="/" className="flex items-center gap-3">
             <img src="/logovapa.png" alt="VAPA" className="h-12 w-12" />
-            <span className="text-2xl font-bold text-lime-400">VAPA.es</span>
+            <span className="text-2xl font-bold text-lime-400">Vapa</span>
           </Link>
           <div className="flex items-center gap-6">
             <Link to="/" className="text-lime-300 hover:text-lime-400 transition">Inicio</Link>

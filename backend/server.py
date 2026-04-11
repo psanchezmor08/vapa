@@ -694,6 +694,271 @@ app.add_middleware(
 )
 
 
+class VLSMInput(BaseModel):
+    network: str
+    subnets: List[int]
+
+class VLSMSubnet(BaseModel):
+    network: str
+    broadcast: str
+    first_host: str
+    last_host: str
+    mask: str
+    cidr: int
+    hosts: int
+
+class VLSMOutput(BaseModel):
+    subnets: List[VLSMSubnet]
+
+class PingInput(BaseModel):
+    host: str
+    count: int = 4
+
+class PingOutput(BaseModel):
+    host: str
+    output: str
+    success: bool
+
+class PortScanInput(BaseModel):
+    host: str
+    ports: Optional[str] = "common"
+
+class PortScanResult(BaseModel):
+    port: int
+    state: str
+    service: str
+
+class PortScanOutput(BaseModel):
+    host: str
+    ip: str
+    open_ports: List[PortScanResult]
+    scan_time: float
+
+class IPv4toIPv6Input(BaseModel):
+    ip: str
+
+class IPv4toIPv6Output(BaseModel):
+    ipv4: str
+    ipv6_mapped: str
+    ipv6_compatible: str
+    ipv6_6to4: str
+
+class DNSLookupInput(BaseModel):
+    domain: str
+    record_type: str = "A"
+
+class DNSLookupOutput(BaseModel):
+    domain: str
+    record_type: str
+    records: List[str]
+
+
+class VLSMInput(BaseModel):
+    network: str
+    subnets: List[int]
+
+class VLSMSubnet(BaseModel):
+    network: str
+    broadcast: str
+    first_host: str
+    last_host: str
+    mask: str
+    cidr: int
+    hosts: int
+
+class VLSMOutput(BaseModel):
+    subnets: List[VLSMSubnet]
+
+class PingInput(BaseModel):
+    host: str
+    count: int = 4
+
+class PingOutput(BaseModel):
+    host: str
+    output: str
+    success: bool
+
+class PortScanInput(BaseModel):
+    host: str
+    ports: Optional[str] = "common"
+
+class PortScanResult(BaseModel):
+    port: int
+    state: str
+    service: str
+
+class PortScanOutput(BaseModel):
+    host: str
+    ip: str
+    open_ports: List[PortScanResult]
+    scan_time: float
+
+class IPv4toIPv6Input(BaseModel):
+    ip: str
+
+class IPv4toIPv6Output(BaseModel):
+    ipv4: str
+    ipv6_mapped: str
+    ipv6_compatible: str
+    ipv6_6to4: str
+
+class DNSLookupInput(BaseModel):
+    domain: str
+    record_type: str = "A"
+
+class DNSLookupOutput(BaseModel):
+    domain: str
+    record_type: str
+    records: List[str]
+
+
+@api_router.post("/tools/vlsm", response_model=VLSMOutput)
+async def vlsm_calculator(input_data: VLSMInput):
+    try:
+        import ipaddress
+        network = ipaddress.ip_network(input_data.network, strict=False)
+        subnets_needed = sorted(input_data.subnets, reverse=True)
+        result = []
+        current_network = network
+        for hosts_needed in subnets_needed:
+            prefix = 32 - (hosts_needed + 2 - 1).bit_length()
+            if prefix < 0:
+                prefix = 0
+            subnet = ipaddress.ip_network(f"{current_network.network_address}/{prefix}", strict=False)
+            if subnet.network_address < current_network.network_address:
+                subnet = ipaddress.ip_network(f"{current_network.network_address}/{prefix}", strict=False)
+            all_hosts = list(subnet.hosts())
+            result.append(VLSMSubnet(
+                network=str(subnet.network_address),
+                broadcast=str(subnet.broadcast_address),
+                first_host=str(all_hosts[0]) if all_hosts else str(subnet.network_address),
+                last_host=str(all_hosts[-1]) if all_hosts else str(subnet.broadcast_address),
+                mask=str(subnet.netmask),
+                cidr=prefix,
+                hosts=subnet.num_addresses - 2 if subnet.num_addresses > 2 else 0
+            ))
+            next_addr = int(subnet.broadcast_address) + 1
+            if next_addr > int(network.broadcast_address):
+                break
+            current_network = ipaddress.ip_network(f"{ipaddress.IPv4Address(next_addr)}/{network.prefixlen}", strict=False)
+            current_network = list(ipaddress.ip_network(f"{ipaddress.IPv4Address(next_addr)}/0", strict=False).subnets(new_prefix=network.prefixlen))[0]
+            current_network = ipaddress.ip_network(f"{ipaddress.IPv4Address(next_addr)}/{network.prefixlen}", strict=False)
+        return VLSMOutput(subnets=result)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error: {str(e)}")
+
+@api_router.post("/tools/ping", response_model=PingOutput)
+async def ping_host(input_data: PingInput):
+    import re
+    import subprocess
+    host = input_data.host.strip()
+    if not re.match(r'^[a-zA-Z0-9.\-_]+$', host):
+        raise HTTPException(status_code=400, detail="Host inválido")
+    count = min(max(input_data.count, 1), 10)
+    try:
+        result = subprocess.run(
+            ["ping", "-c", str(count), "-W", "2", host],
+            capture_output=True, text=True, timeout=30
+        )
+        return PingOutput(
+            host=host,
+            output=result.stdout + result.stderr,
+            success=result.returncode == 0
+        )
+    except subprocess.TimeoutExpired:
+        return PingOutput(host=host, output="Timeout: el host no responde", success=False)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error: {str(e)}")
+
+@api_router.post("/tools/port-scan", response_model=PortScanOutput)
+async def port_scan(input_data: PortScanInput):
+    import socket
+    import time
+    import re
+    host = input_data.host.strip()
+    if not re.match(r'^[a-zA-Z0-9.\-_]+$', host):
+        raise HTTPException(status_code=400, detail="Host inválido")
+    common_ports = {
+        20: "FTP Data", 21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP",
+        53: "DNS", 80: "HTTP", 110: "POP3", 143: "IMAP", 443: "HTTPS",
+        445: "SMB", 3306: "MySQL", 3389: "RDP", 5432: "PostgreSQL",
+        5900: "VNC", 6379: "Redis", 8080: "HTTP-Alt", 8443: "HTTPS-Alt",
+        27017: "MongoDB", 9200: "Elasticsearch"
+    }
+    try:
+        ip = socket.gethostbyname(host)
+    except socket.gaierror:
+        raise HTTPException(status_code=400, detail="No se pudo resolver el host")
+    if input_data.ports == "common":
+        ports_to_scan = list(common_ports.keys())
+    elif "-" in str(input_data.ports):
+        start, end = input_data.ports.split("-")
+        ports_to_scan = list(range(int(start), min(int(end) + 1, int(start) + 1000)))
+    else:
+        ports_to_scan = list(common_ports.keys())
+    start_time = time.time()
+    open_ports = []
+    for port in ports_to_scan:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.5)
+            result = sock.connect_ex((ip, port))
+            if result == 0:
+                open_ports.append(PortScanResult(
+                    port=port,
+                    state="open",
+                    service=common_ports.get(port, "unknown")
+                ))
+            sock.close()
+        except:
+            pass
+    scan_time = round(time.time() - start_time, 2)
+    return PortScanOutput(host=host, ip=ip, open_ports=open_ports, scan_time=scan_time)
+
+@api_router.post("/tools/ipv4-to-ipv6", response_model=IPv4toIPv6Output)
+async def ipv4_to_ipv6(input_data: IPv4toIPv6Input):
+    try:
+        import ipaddress
+        ipv4 = ipaddress.IPv4Address(input_data.ip)
+        octets = str(ipv4).split(".")
+        hex_parts = [f"{int(o):02x}" for o in octets]
+        ipv6_mapped = f"::ffff:{hex_parts[0]}{hex_parts[1]}:{hex_parts[2]}{hex_parts[3]}"
+        ipv6_compatible = f"::{hex_parts[0]}{hex_parts[1]}:{hex_parts[2]}{hex_parts[3]}"
+        second_octet = int(octets[1])
+        ipv6_6to4 = f"2002:{int(octets[0]):02x}{int(octets[1]):02x}:{int(octets[2]):02x}{int(octets[3]):02x}::1"
+        return IPv4toIPv6Output(
+            ipv4=str(ipv4),
+            ipv6_mapped=ipv6_mapped,
+            ipv6_compatible=ipv6_compatible,
+            ipv6_6to4=ipv6_6to4
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"IP inválida: {str(e)}")
+
+@api_router.post("/tools/dns-lookup", response_model=DNSLookupOutput)
+async def dns_lookup(input_data: DNSLookupInput):
+    import subprocess
+    import re
+    domain = input_data.domain.strip()
+    if not re.match(r'^[a-zA-Z0-9.\-_]+$', domain):
+        raise HTTPException(status_code=400, detail="Dominio inválido")
+    record_type = input_data.record_type.upper()
+    if record_type not in ["A", "MX", "CNAME", "TXT", "NS", "AAAA"]:
+        raise HTTPException(status_code=400, detail="Tipo de registro no soportado")
+    try:
+        result = subprocess.run(
+            ["dig", "+short", record_type, domain],
+            capture_output=True, text=True, timeout=10
+        )
+        records = [r.strip() for r in result.stdout.strip().split("\n") if r.strip()]
+        if not records:
+            records = ["No se encontraron registros"]
+        return DNSLookupOutput(domain=domain, record_type=record_type, records=records)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=400, detail="Timeout en la consulta DNS")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error: {str(e)}")
+
 # ============= MODELOS DE PROYECTOS =============
 
 class ProjectMember(BaseModel):
@@ -832,17 +1097,290 @@ class AddMemberRequest(BaseModel):
 class UpdateMemberRole(BaseModel):
     role: str
 
-# ============= HELPERS DE PROYECTOS =============
+@api_router.post("/tools/vlsm", response_model=VLSMOutput)
+async def vlsm_calculator(input_data: VLSMInput):
+    try:
+        import ipaddress
+        network = ipaddress.ip_network(input_data.network, strict=False)
+        subnets_needed = sorted(input_data.subnets, reverse=True)
+        result = []
+        current_network = network
+        for hosts_needed in subnets_needed:
+            prefix = 32 - (hosts_needed + 2 - 1).bit_length()
+            if prefix < 0:
+                prefix = 0
+            subnet = ipaddress.ip_network(f"{current_network.network_address}/{prefix}", strict=False)
+            if subnet.network_address < current_network.network_address:
+                subnet = ipaddress.ip_network(f"{current_network.network_address}/{prefix}", strict=False)
+            all_hosts = list(subnet.hosts())
+            result.append(VLSMSubnet(
+                network=str(subnet.network_address),
+                broadcast=str(subnet.broadcast_address),
+                first_host=str(all_hosts[0]) if all_hosts else str(subnet.network_address),
+                last_host=str(all_hosts[-1]) if all_hosts else str(subnet.broadcast_address),
+                mask=str(subnet.netmask),
+                cidr=prefix,
+                hosts=subnet.num_addresses - 2 if subnet.num_addresses > 2 else 0
+            ))
+            next_addr = int(subnet.broadcast_address) + 1
+            if next_addr > int(network.broadcast_address):
+                break
+            current_network = ipaddress.ip_network(f"{ipaddress.IPv4Address(next_addr)}/{network.prefixlen}", strict=False)
+            current_network = list(ipaddress.ip_network(f"{ipaddress.IPv4Address(next_addr)}/0", strict=False).subnets(new_prefix=network.prefixlen))[0]
+            current_network = ipaddress.ip_network(f"{ipaddress.IPv4Address(next_addr)}/{network.prefixlen}", strict=False)
+        return VLSMOutput(subnets=result)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error: {str(e)}")
 
-async def check_project_member(project_id: str, user_id: str) -> bool:
-    project = await db.projects.find_one({"id": project_id})
-    if not project:
-        return False
-    if project["created_by"] == user_id:
-        return True
-    return any(m["user_id"] == user_id for m in project.get("members", []))
+@api_router.post("/tools/ping", response_model=PingOutput)
+async def ping_host(input_data: PingInput):
+    import re
+    import subprocess
+    host = input_data.host.strip()
+    if not re.match(r'^[a-zA-Z0-9.\-_]+$', host):
+        raise HTTPException(status_code=400, detail="Host inválido")
+    count = min(max(input_data.count, 1), 10)
+    try:
+        result = subprocess.run(
+            ["ping", "-c", str(count), "-W", "2", host],
+            capture_output=True, text=True, timeout=30
+        )
+        return PingOutput(
+            host=host,
+            output=result.stdout + result.stderr,
+            success=result.returncode == 0
+        )
+    except subprocess.TimeoutExpired:
+        return PingOutput(host=host, output="Timeout: el host no responde", success=False)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error: {str(e)}")
 
-# ============= RUTAS DE PROYECTOS =============
+@api_router.post("/tools/port-scan", response_model=PortScanOutput)
+async def port_scan(input_data: PortScanInput):
+    import socket
+    import time
+    import re
+    host = input_data.host.strip()
+    if not re.match(r'^[a-zA-Z0-9.\-_]+$', host):
+        raise HTTPException(status_code=400, detail="Host inválido")
+    common_ports = {
+        20: "FTP Data", 21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP",
+        53: "DNS", 80: "HTTP", 110: "POP3", 143: "IMAP", 443: "HTTPS",
+        445: "SMB", 3306: "MySQL", 3389: "RDP", 5432: "PostgreSQL",
+        5900: "VNC", 6379: "Redis", 8080: "HTTP-Alt", 8443: "HTTPS-Alt",
+        27017: "MongoDB", 9200: "Elasticsearch"
+    }
+    try:
+        ip = socket.gethostbyname(host)
+    except socket.gaierror:
+        raise HTTPException(status_code=400, detail="No se pudo resolver el host")
+    if input_data.ports == "common":
+        ports_to_scan = list(common_ports.keys())
+    elif "-" in str(input_data.ports):
+        start, end = input_data.ports.split("-")
+        ports_to_scan = list(range(int(start), min(int(end) + 1, int(start) + 1000)))
+    else:
+        ports_to_scan = list(common_ports.keys())
+    start_time = time.time()
+    open_ports = []
+    for port in ports_to_scan:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.5)
+            result = sock.connect_ex((ip, port))
+            if result == 0:
+                open_ports.append(PortScanResult(
+                    port=port,
+                    state="open",
+                    service=common_ports.get(port, "unknown")
+                ))
+            sock.close()
+        except:
+            pass
+    scan_time = round(time.time() - start_time, 2)
+    return PortScanOutput(host=host, ip=ip, open_ports=open_ports, scan_time=scan_time)
+
+@api_router.post("/tools/ipv4-to-ipv6", response_model=IPv4toIPv6Output)
+async def ipv4_to_ipv6(input_data: IPv4toIPv6Input):
+    try:
+        import ipaddress
+        ipv4 = ipaddress.IPv4Address(input_data.ip)
+        octets = str(ipv4).split(".")
+        hex_parts = [f"{int(o):02x}" for o in octets]
+        ipv6_mapped = f"::ffff:{hex_parts[0]}{hex_parts[1]}:{hex_parts[2]}{hex_parts[3]}"
+        ipv6_compatible = f"::{hex_parts[0]}{hex_parts[1]}:{hex_parts[2]}{hex_parts[3]}"
+        second_octet = int(octets[1])
+        ipv6_6to4 = f"2002:{int(octets[0]):02x}{int(octets[1]):02x}:{int(octets[2]):02x}{int(octets[3]):02x}::1"
+        return IPv4toIPv6Output(
+            ipv4=str(ipv4),
+            ipv6_mapped=ipv6_mapped,
+            ipv6_compatible=ipv6_compatible,
+            ipv6_6to4=ipv6_6to4
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"IP inválida: {str(e)}")
+
+@api_router.post("/tools/dns-lookup", response_model=DNSLookupOutput)
+async def dns_lookup(input_data: DNSLookupInput):
+    import subprocess
+    import re
+    domain = input_data.domain.strip()
+    if not re.match(r'^[a-zA-Z0-9.\-_]+$', domain):
+        raise HTTPException(status_code=400, detail="Dominio inválido")
+    record_type = input_data.record_type.upper()
+    if record_type not in ["A", "MX", "CNAME", "TXT", "NS", "AAAA"]:
+        raise HTTPException(status_code=400, detail="Tipo de registro no soportado")
+    try:
+        result = subprocess.run(
+            ["dig", "+short", record_type, domain],
+            capture_output=True, text=True, timeout=10
+        )
+        records = [r.strip() for r in result.stdout.strip().split("\n") if r.strip()]
+        if not records:
+            records = ["No se encontraron registros"]
+        return DNSLookupOutput(domain=domain, record_type=record_type, records=records)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=400, detail="Timeout en la consulta DNS")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error: {str(e)}")
+
+# ============= MODELOS DE PROYECTOS =============
+
+class ProjectMember(BaseModel):
+    user_id: str
+    role: str = "member"  # owner, member
+
+class Project(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    description: str
+    status: str = "active"  # active, completed, archived
+    members: List[ProjectMember] = []
+    created_by: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class ProjectCreate(BaseModel):
+    name: str
+    description: str
+    status: str = "active"
+    member_ids: List[str] = []
+
+class ProjectUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[str] = None
+    member_ids: Optional[List[str]] = None
+
+class ProjectResponse(BaseModel):
+    id: str
+    name: str
+    description: str
+    status: str
+    members: List[ProjectMember]
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+class Task(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    project_id: str
+    title: str
+    description: str = ""
+    status: str = "pending"  # pending, in_progress, completed
+    assigned_to: Optional[str] = None
+    created_by: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class TaskCreate(BaseModel):
+    title: str
+    description: str = ""
+    status: str = "pending"
+    assigned_to: Optional[str] = None
+
+class TaskUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[str] = None
+    assigned_to: Optional[str] = None
+
+class ProjectError(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    project_id: str
+    title: str
+    description: str = ""
+    severity: str = "medium"  # low, medium, high, critical
+    status: str = "open"  # open, resolved
+    created_by: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class ProjectErrorCreate(BaseModel):
+    title: str
+    description: str = ""
+    severity: str = "medium"
+    status: str = "open"
+
+class ProjectErrorUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    severity: Optional[str] = None
+    status: Optional[str] = None
+
+class Documentation(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    project_id: str
+    title: str
+    content: str = ""
+    created_by: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class DocumentationCreate(BaseModel):
+    title: str
+    content: str = ""
+
+class DocumentationUpdate(BaseModel):
+    title: Optional[str] = None
+    content: Optional[str] = None
+
+class Report(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    project_id: str
+    title: str
+    content: str = ""
+    report_type: str = "manual"  # manual, auto
+    created_by: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class ReportCreate(BaseModel):
+    title: str
+    content: str = ""
+    report_type: str = "manual"
+
+class FileAttachment(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    project_id: str
+    filename: str
+    original_name: str
+    file_type: str
+    file_size: int
+    uploaded_by: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class AddMemberRequest(BaseModel):
+    user_id: str
+    role: str = "member"  # owner, manager, member
+
+class UpdateMemberRole(BaseModel):
+    role: str
 
 @api_router.get("/projects", response_model=List[ProjectResponse])
 async def get_projects(current_user: User = Depends(get_current_user)):
@@ -1368,18 +1906,6 @@ class AddMemberRequest(BaseModel):
 
 class UpdateMemberRole(BaseModel):
     role: str
-
-# ============= HELPERS DE PROYECTOS =============
-
-async def check_project_member(project_id: str, user_id: str) -> bool:
-    project = await db.projects.find_one({"id": project_id})
-    if not project:
-        return False
-    if project["created_by"] == user_id:
-        return True
-    return any(m["user_id"] == user_id for m in project.get("members", []))
-
-# ============= RUTAS DE PROYECTOS =============
 
 @api_router.get("/projects", response_model=List[ProjectResponse])
 async def get_projects(current_user: User = Depends(get_current_user)):
