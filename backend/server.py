@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -693,6 +693,661 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# ============= MODELOS DE PROYECTOS =============
+
+class ProjectMember(BaseModel):
+    user_id: str
+    role: str = "member"  # owner, member
+
+class Project(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    description: str
+    status: str = "active"  # active, completed, archived
+    members: List[ProjectMember] = []
+    created_by: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class ProjectCreate(BaseModel):
+    name: str
+    description: str
+    status: str = "active"
+    member_ids: List[str] = []
+
+class ProjectUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[str] = None
+    member_ids: Optional[List[str]] = None
+
+class ProjectResponse(BaseModel):
+    id: str
+    name: str
+    description: str
+    status: str
+    members: List[ProjectMember]
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+class Task(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    project_id: str
+    title: str
+    description: str = ""
+    status: str = "pending"  # pending, in_progress, completed
+    assigned_to: Optional[str] = None
+    created_by: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class TaskCreate(BaseModel):
+    title: str
+    description: str = ""
+    status: str = "pending"
+    assigned_to: Optional[str] = None
+
+class TaskUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[str] = None
+    assigned_to: Optional[str] = None
+
+class ProjectError(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    project_id: str
+    title: str
+    description: str = ""
+    severity: str = "medium"  # low, medium, high, critical
+    status: str = "open"  # open, resolved
+    created_by: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class ProjectErrorCreate(BaseModel):
+    title: str
+    description: str = ""
+    severity: str = "medium"
+    status: str = "open"
+
+class ProjectErrorUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    severity: Optional[str] = None
+    status: Optional[str] = None
+
+class Documentation(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    project_id: str
+    title: str
+    content: str = ""
+    created_by: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class DocumentationCreate(BaseModel):
+    title: str
+    content: str = ""
+
+class DocumentationUpdate(BaseModel):
+    title: Optional[str] = None
+    content: Optional[str] = None
+
+class Report(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    project_id: str
+    title: str
+    content: str = ""
+    report_type: str = "manual"  # manual, auto
+    created_by: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class ReportCreate(BaseModel):
+    title: str
+    content: str = ""
+    report_type: str = "manual"
+
+class FileAttachment(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    project_id: str
+    filename: str
+    original_name: str
+    file_type: str
+    file_size: int
+    uploaded_by: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class AddMemberRequest(BaseModel):
+    user_id: str
+    role: str = "member"  # owner, manager, member
+
+class UpdateMemberRole(BaseModel):
+    role: str
+
+# ============= HELPERS DE PROYECTOS =============
+
+async def check_project_member(project_id: str, user_id: str) -> bool:
+    project = await db.projects.find_one({"id": project_id})
+    if not project:
+        return False
+    if project["created_by"] == user_id:
+        return True
+    return any(m["user_id"] == user_id for m in project.get("members", []))
+
+# ============= RUTAS DE PROYECTOS =============
+
+@api_router.get("/projects", response_model=List[ProjectResponse])
+async def get_projects(current_user: User = Depends(get_current_user)):
+    if current_user.role == "admin":
+        projects = await db.projects.find({}, {"_id": 0}).to_list(100)
+    else:
+        projects = await db.projects.find(
+            {"$or": [
+                {"created_by": current_user.id},
+                {"members": {"$elemMatch": {"user_id": current_user.id}}}
+            ]}, {"_id": 0}
+        ).to_list(100)
+    result = []
+    for p in projects:
+        for field in ["created_at", "updated_at"]:
+            if isinstance(p.get(field), str):
+                p[field] = datetime.fromisoformat(p[field])
+        result.append(ProjectResponse(**p))
+    return result
+
+@api_router.post("/projects", response_model=ProjectResponse)
+async def create_project(data: ProjectCreate, current_user: User = Depends(get_current_active_editor)):
+    members = [ProjectMember(user_id=uid) for uid in data.member_ids]
+    project = Project(
+        name=data.name,
+        description=data.description,
+        status=data.status,
+        members=members,
+        created_by=current_user.id
+    )
+    doc = project.model_dump()
+    doc["created_at"] = doc["created_at"].isoformat()
+    doc["updated_at"] = doc["updated_at"].isoformat()
+    doc["members"] = [m.model_dump() for m in members]
+    await db.projects.insert_one(doc)
+    return ProjectResponse(**project.model_dump())
+
+@api_router.get("/projects/{project_id}", response_model=ProjectResponse)
+async def get_project(project_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    for field in ["created_at", "updated_at"]:
+        if isinstance(project.get(field), str):
+            project[field] = datetime.fromisoformat(project[field])
+    return ProjectResponse(**project)
+
+@api_router.put("/projects/{project_id}", response_model=ProjectResponse)
+async def update_project(project_id: str, data: ProjectUpdate, current_user: User = Depends(get_current_user)):
+    project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    if project["created_by"] != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes permisos para editar este proyecto")
+    update = data.model_dump(exclude_unset=True)
+    if "member_ids" in update:
+        update["members"] = [{"user_id": uid, "role": "member"} for uid in update.pop("member_ids")]
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.projects.update_one({"id": project_id}, {"$set": update})
+    updated = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    for field in ["created_at", "updated_at"]:
+        if isinstance(updated.get(field), str):
+            updated[field] = datetime.fromisoformat(updated[field])
+    return ProjectResponse(**updated)
+
+@api_router.delete("/projects/{project_id}")
+async def delete_project(project_id: str, current_user: User = Depends(get_current_active_admin)):
+    result = await db.projects.delete_one({"id": project_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    await db.tasks.delete_many({"project_id": project_id})
+    await db.project_errors.delete_many({"project_id": project_id})
+    await db.documentation.delete_many({"project_id": project_id})
+    await db.reports.delete_many({"project_id": project_id})
+    await db.files.delete_many({"project_id": project_id})
+    return {"message": "Proyecto eliminado"}
+
+# ============= RUTAS DE TAREAS =============
+
+@api_router.get("/projects/{project_id}/tasks", response_model=List[Task])
+async def get_tasks(project_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    tasks = await db.tasks.find({"project_id": project_id}, {"_id": 0}).to_list(100)
+    for t in tasks:
+        for field in ["created_at", "updated_at"]:
+            if isinstance(t.get(field), str):
+                t[field] = datetime.fromisoformat(t[field])
+    return tasks
+
+@api_router.post("/projects/{project_id}/tasks", response_model=Task)
+async def create_task(project_id: str, data: TaskCreate, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    task = Task(project_id=project_id, created_by=current_user.id, **data.model_dump())
+    doc = task.model_dump()
+    doc["created_at"] = doc["created_at"].isoformat()
+    doc["updated_at"] = doc["updated_at"].isoformat()
+    await db.tasks.insert_one(doc)
+    return task
+
+@api_router.put("/projects/{project_id}/tasks/{task_id}", response_model=Task)
+async def update_task(project_id: str, task_id: str, data: TaskUpdate, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    update = data.model_dump(exclude_unset=True)
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.tasks.update_one({"id": task_id, "project_id": project_id}, {"$set": update})
+    updated = await db.tasks.find_one({"id": task_id}, {"_id": 0})
+    for field in ["created_at", "updated_at"]:
+        if isinstance(updated.get(field), str):
+            updated[field] = datetime.fromisoformat(updated[field])
+    return Task(**updated)
+
+@api_router.delete("/projects/{project_id}/tasks/{task_id}")
+async def delete_task(project_id: str, task_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    await db.tasks.delete_one({"id": task_id, "project_id": project_id})
+    return {"message": "Tarea eliminada"}
+
+# ============= RUTAS DE ERRORES =============
+
+@api_router.get("/projects/{project_id}/errors", response_model=List[ProjectError])
+async def get_errors(project_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    errors = await db.project_errors.find({"project_id": project_id}, {"_id": 0}).to_list(100)
+    for e in errors:
+        for field in ["created_at", "updated_at"]:
+            if isinstance(e.get(field), str):
+                e[field] = datetime.fromisoformat(e[field])
+    return errors
+
+@api_router.post("/projects/{project_id}/errors", response_model=ProjectError)
+async def create_error(project_id: str, data: ProjectErrorCreate, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    error = ProjectError(project_id=project_id, created_by=current_user.id, **data.model_dump())
+    doc = error.model_dump()
+    doc["created_at"] = doc["created_at"].isoformat()
+    doc["updated_at"] = doc["updated_at"].isoformat()
+    await db.project_errors.insert_one(doc)
+    return error
+
+@api_router.put("/projects/{project_id}/errors/{error_id}", response_model=ProjectError)
+async def update_error(project_id: str, error_id: str, data: ProjectErrorUpdate, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    update = data.model_dump(exclude_unset=True)
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.project_errors.update_one({"id": error_id, "project_id": project_id}, {"$set": update})
+    updated = await db.project_errors.find_one({"id": error_id}, {"_id": 0})
+    for field in ["created_at", "updated_at"]:
+        if isinstance(updated.get(field), str):
+            updated[field] = datetime.fromisoformat(updated[field])
+    return ProjectError(**updated)
+
+@api_router.delete("/projects/{project_id}/errors/{error_id}")
+async def delete_error(project_id: str, error_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    await db.project_errors.delete_one({"id": error_id, "project_id": project_id})
+    return {"message": "Error eliminado"}
+
+# ============= RUTAS DE DOCUMENTACION =============
+
+@api_router.get("/projects/{project_id}/docs", response_model=List[Documentation])
+async def get_docs(project_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    docs = await db.documentation.find({"project_id": project_id}, {"_id": 0}).to_list(100)
+    for d in docs:
+        for field in ["created_at", "updated_at"]:
+            if isinstance(d.get(field), str):
+                d[field] = datetime.fromisoformat(d[field])
+    return docs
+
+@api_router.post("/projects/{project_id}/docs", response_model=Documentation)
+async def create_doc(project_id: str, data: DocumentationCreate, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    doc_obj = Documentation(project_id=project_id, created_by=current_user.id, **data.model_dump())
+    doc = doc_obj.model_dump()
+    doc["created_at"] = doc["created_at"].isoformat()
+    doc["updated_at"] = doc["updated_at"].isoformat()
+    await db.documentation.insert_one(doc)
+    return doc_obj
+
+@api_router.put("/projects/{project_id}/docs/{doc_id}", response_model=Documentation)
+async def update_doc(project_id: str, doc_id: str, data: DocumentationUpdate, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    update = data.model_dump(exclude_unset=True)
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.documentation.update_one({"id": doc_id, "project_id": project_id}, {"$set": update})
+    updated = await db.documentation.find_one({"id": doc_id}, {"_id": 0})
+    for field in ["created_at", "updated_at"]:
+        if isinstance(updated.get(field), str):
+            updated[field] = datetime.fromisoformat(updated[field])
+    return Documentation(**updated)
+
+@api_router.delete("/projects/{project_id}/docs/{doc_id}")
+async def delete_doc(project_id: str, doc_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    await db.documentation.delete_one({"id": doc_id, "project_id": project_id})
+    return {"message": "Documento eliminado"}
+
+# ============= RUTAS DE INFORMES =============
+
+@api_router.get("/projects/{project_id}/reports", response_model=List[Report])
+async def get_reports(project_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    reports = await db.reports.find({"project_id": project_id}, {"_id": 0}).to_list(100)
+    for r in reports:
+        if isinstance(r.get("created_at"), str):
+            r["created_at"] = datetime.fromisoformat(r["created_at"])
+    return reports
+
+@api_router.post("/projects/{project_id}/reports", response_model=Report)
+async def create_report(project_id: str, data: ReportCreate, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    if data.report_type == "auto":
+        project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+        tasks = await db.tasks.find({"project_id": project_id}, {"_id": 0}).to_list(100)
+        errors = await db.project_errors.find({"project_id": project_id}, {"_id": 0}).to_list(100)
+        docs = await db.documentation.find({"project_id": project_id}, {"_id": 0}).to_list(100)
+        tasks_pending = len([t for t in tasks if t["status"] == "pending"])
+        tasks_progress = len([t for t in tasks if t["status"] == "in_progress"])
+        tasks_done = len([t for t in tasks if t["status"] == "completed"])
+        errors_open = len([e for e in errors if e["status"] == "open"])
+        errors_resolved = len([e for e in errors if e["status"] == "resolved"])
+        content = f"""# Informe Automático: {project["name"]}
+
+## Descripción
+{project["description"]}
+
+## Estado del Proyecto
+Estado actual: {project["status"]}
+
+## Resumen de Tareas
+- Pendientes: {tasks_pending}
+- En progreso: {tasks_progress}
+- Completadas: {tasks_done}
+- Total: {len(tasks)}
+
+## Resumen de Errores
+- Abiertos: {errors_open}
+- Resueltos: {errors_resolved}
+- Total: {len(errors)}
+
+## Documentación
+- Documentos disponibles: {len(docs)}
+
+## Fecha de generación
+{datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M")} UTC
+"""
+        data.content = content
+    report = Report(project_id=project_id, created_by=current_user.id, **data.model_dump())
+    doc = report.model_dump()
+    doc["created_at"] = doc["created_at"].isoformat()
+    await db.reports.insert_one(doc)
+    return report
+
+@api_router.delete("/projects/{project_id}/reports/{report_id}")
+async def delete_report(project_id: str, report_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    await db.reports.delete_one({"id": report_id, "project_id": project_id})
+    return {"message": "Informe eliminado"}
+
+@api_router.get("/projects/{project_id}/reports/{report_id}/download/{format}")
+async def download_report(project_id: str, report_id: str, format: str, current_user: User = Depends(get_current_user)):
+    from fastapi.responses import StreamingResponse
+    import io
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    report = await db.reports.find_one({"id": report_id, "project_id": project_id}, {"_id": 0})
+    if not report:
+        raise HTTPException(status_code=404, detail="Informe no encontrado")
+    if format == "docx":
+        from docx import Document
+        from docx.shared import Pt, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        document = Document()
+        style = document.styles["Normal"]
+        style.font.name = "Arial"
+        style.font.size = Pt(11)
+        title = document.add_heading(report["title"], 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        for run in title.runs:
+            run.font.color.rgb = RGBColor(0x20, 0x5C, 0x00)
+        document.add_paragraph(f'Proyecto: {project_id}')
+        document.add_paragraph(f'Fecha: {report["created_at"]}')
+        document.add_paragraph("")
+        for line in report["content"].split("\n"):
+            if line.startswith("# "):
+                p = document.add_heading(line[2:], 1)
+                for run in p.runs:
+                    run.font.color.rgb = RGBColor(0x20, 0x5C, 0x00)
+            elif line.startswith("## "):
+                p = document.add_heading(line[3:], 2)
+                for run in p.runs:
+                    run.font.color.rgb = RGBColor(0x4A, 0x8C, 0x00)
+            elif line.startswith("- "):
+                document.add_paragraph(line[2:], style="List Bullet")
+            elif line.strip():
+                document.add_paragraph(line)
+        buffer = io.BytesIO()
+        document.save(buffer)
+        buffer.seek(0)
+        filename = f"{report['title'].replace(' ', '_')}.docx"
+        return StreamingResponse(
+            buffer,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    elif format == "pdf":
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.colors import HexColor
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+        from reportlab.lib.units import cm
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=2*cm, bottomMargin=2*cm)
+        styles = getSampleStyleSheet()
+        lime = HexColor("#cdff00")
+        dark = HexColor("#1a1a1a")
+        styles.add(ParagraphStyle(name="VapaTitle", fontSize=20, textColor=HexColor("#cdff00"), spaceAfter=12, fontName="Helvetica-Bold"))
+        styles.add(ParagraphStyle(name="VapaH1", fontSize=14, textColor=HexColor("#cdff00"), spaceAfter=8, fontName="Helvetica-Bold"))
+        styles.add(ParagraphStyle(name="VapaH2", fontSize=12, textColor=HexColor("#88cc00"), spaceAfter=6, fontName="Helvetica-Bold"))
+        styles.add(ParagraphStyle(name="VapaBody", fontSize=10, textColor=HexColor("#333333"), spaceAfter=4))
+        story = []
+        story.append(Paragraph(report["title"], styles["VapaTitle"]))
+        story.append(Spacer(1, 0.5*cm))
+        for line in report["content"].split("\n"):
+            if line.startswith("# "):
+                story.append(Paragraph(line[2:], styles["VapaH1"]))
+            elif line.startswith("## "):
+                story.append(Paragraph(line[3:], styles["VapaH2"]))
+            elif line.startswith("- "):
+                story.append(Paragraph(f"• {line[2:]}", styles["VapaBody"]))
+            elif line.strip():
+                story.append(Paragraph(line, styles["VapaBody"]))
+            else:
+                story.append(Spacer(1, 0.3*cm))
+        doc.build(story)
+        buffer.seek(0)
+        filename = f"{report['title'].replace(' ', '_')}.pdf"
+        return StreamingResponse(
+            buffer,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    else:
+        raise HTTPException(status_code=400, detail="Formato no soportado. Usa 'pdf' o 'docx'")
+
+# ============= RUTAS DE MIEMBROS =============
+
+@api_router.get("/projects/{project_id}/members")
+async def get_members(project_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    members = project.get("members", [])
+    result = []
+    for m in members:
+        user = await db.users.find_one({"id": m["user_id"]}, {"_id": 0})
+        if user:
+            result.append({"user_id": m["user_id"], "email": user["email"], "role": m.get("role", "member")})
+    return result
+
+@api_router.post("/projects/{project_id}/members")
+async def add_member(project_id: str, data: AddMemberRequest, current_user: User = Depends(get_current_user)):
+    project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    is_owner = project["created_by"] == current_user.id
+    is_manager = any(m["user_id"] == current_user.id and m.get("role") in ["owner", "manager"] for m in project.get("members", []))
+    if not is_owner and not is_manager and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes permisos para añadir miembros")
+    existing = any(m["user_id"] == data.user_id for m in project.get("members", []))
+    if existing:
+        raise HTTPException(status_code=400, detail="El usuario ya es miembro del proyecto")
+    await db.projects.update_one(
+        {"id": project_id},
+        {"$push": {"members": {"user_id": data.user_id, "role": data.role}}}
+    )
+    return {"message": "Miembro añadido"}
+
+@api_router.put("/projects/{project_id}/members/{user_id}")
+async def update_member_role(project_id: str, user_id: str, data: UpdateMemberRole, current_user: User = Depends(get_current_user)):
+    project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    is_owner = project["created_by"] == current_user.id
+    if not is_owner and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Solo el propietario o admin puede cambiar roles")
+    await db.projects.update_one(
+        {"id": project_id, "members.user_id": user_id},
+        {"$set": {"members.$.role": data.role}}
+    )
+    return {"message": "Rol actualizado"}
+
+@api_router.delete("/projects/{project_id}/members/{user_id}")
+async def remove_member(project_id: str, user_id: str, current_user: User = Depends(get_current_user)):
+    project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    is_owner = project["created_by"] == current_user.id
+    is_manager = any(m["user_id"] == current_user.id and m.get("role") in ["owner", "manager"] for m in project.get("members", []))
+    if not is_owner and not is_manager and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes permisos para eliminar miembros")
+    await db.projects.update_one(
+        {"id": project_id},
+        {"$pull": {"members": {"user_id": user_id}}}
+    )
+    return {"message": "Miembro eliminado"}
+
+@api_router.get("/projects/{project_id}/available-users")
+async def get_available_users(project_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    member_ids = [m["user_id"] for m in project.get("members", [])]
+    member_ids.append(project["created_by"])
+    all_users = await db.users.find({}, {"_id": 0}).to_list(100)
+    available = [{"id": u["id"], "email": u["email"]} for u in all_users if u["id"] not in member_ids]
+    return available
+
+
+# ============= RUTAS DE ARCHIVOS =============
+
+import shutil
+
+UPLOAD_DIR = "/app/uploads"
+
+@api_router.post("/projects/{project_id}/files")
+async def upload_file(project_id: str, file: UploadFile, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    os.makedirs(f"{UPLOAD_DIR}/{project_id}", exist_ok=True)
+    file_id = str(uuid.uuid4())
+    ext = os.path.splitext(file.filename)[1]
+    saved_name = f"{file_id}{ext}"
+    file_path = f"{UPLOAD_DIR}/{project_id}/{saved_name}"
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    file_size = os.path.getsize(file_path)
+    attachment = FileAttachment(
+        project_id=project_id,
+        filename=saved_name,
+        original_name=file.filename,
+        file_type=file.content_type,
+        file_size=file_size,
+        uploaded_by=current_user.id,
+        category=category
+    )
+    doc = attachment.model_dump()
+    doc["created_at"] = doc["created_at"].isoformat()
+    await db.files.insert_one(doc)
+    return {"id": attachment.id, "filename": file.filename, "size": file_size}
+
+@api_router.get("/projects/{project_id}/files")
+async def get_files(project_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    files = await db.files.find({"project_id": project_id}, {"_id": 0}).to_list(100)
+    for f in files:
+        if isinstance(f.get("created_at"), str):
+            f["created_at"] = datetime.fromisoformat(f["created_at"])
+    return files
+
+@api_router.get("/projects/{project_id}/files/{file_id}/download")
+async def download_file(project_id: str, file_id: str, current_user: User = Depends(get_current_user)):
+    from fastapi.responses import FileResponse
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    file_doc = await db.files.find_one({"id": file_id, "project_id": project_id}, {"_id": 0})
+    if not file_doc:
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+    file_path = f"{UPLOAD_DIR}/{project_id}/{file_doc['filename']}"
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Archivo no encontrado en disco")
+    return FileResponse(file_path, filename=file_doc["original_name"])
+
+@api_router.delete("/projects/{project_id}/files/{file_id}")
+async def delete_file(project_id: str, file_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    file_doc = await db.files.find_one({"id": file_id, "project_id": project_id}, {"_id": 0})
+    if file_doc:
+        file_path = f"{UPLOAD_DIR}/{project_id}/{file_doc['filename']}"
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    await db.files.delete_one({"id": file_id, "project_id": project_id})
+    return {"message": "Archivo eliminado"}
+
 # Include router
 app.include_router(api_router)
 
@@ -706,3 +1361,541 @@ logger = logging.getLogger(__name__)
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
+
+class AddMemberRequest(BaseModel):
+    user_id: str
+    role: str = "member"  # owner, manager, member
+
+class UpdateMemberRole(BaseModel):
+    role: str
+
+# ============= HELPERS DE PROYECTOS =============
+
+async def check_project_member(project_id: str, user_id: str) -> bool:
+    project = await db.projects.find_one({"id": project_id})
+    if not project:
+        return False
+    if project["created_by"] == user_id:
+        return True
+    return any(m["user_id"] == user_id for m in project.get("members", []))
+
+# ============= RUTAS DE PROYECTOS =============
+
+@api_router.get("/projects", response_model=List[ProjectResponse])
+async def get_projects(current_user: User = Depends(get_current_user)):
+    if current_user.role == "admin":
+        projects = await db.projects.find({}, {"_id": 0}).to_list(100)
+    else:
+        projects = await db.projects.find(
+            {"$or": [
+                {"created_by": current_user.id},
+                {"members": {"$elemMatch": {"user_id": current_user.id}}}
+            ]}, {"_id": 0}
+        ).to_list(100)
+    result = []
+    for p in projects:
+        for field in ["created_at", "updated_at"]:
+            if isinstance(p.get(field), str):
+                p[field] = datetime.fromisoformat(p[field])
+        result.append(ProjectResponse(**p))
+    return result
+
+@api_router.post("/projects", response_model=ProjectResponse)
+async def create_project(data: ProjectCreate, current_user: User = Depends(get_current_active_editor)):
+    members = [ProjectMember(user_id=uid) for uid in data.member_ids]
+    project = Project(
+        name=data.name,
+        description=data.description,
+        status=data.status,
+        members=members,
+        created_by=current_user.id
+    )
+    doc = project.model_dump()
+    doc["created_at"] = doc["created_at"].isoformat()
+    doc["updated_at"] = doc["updated_at"].isoformat()
+    doc["members"] = [m.model_dump() for m in members]
+    await db.projects.insert_one(doc)
+    return ProjectResponse(**project.model_dump())
+
+@api_router.get("/projects/{project_id}", response_model=ProjectResponse)
+async def get_project(project_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    for field in ["created_at", "updated_at"]:
+        if isinstance(project.get(field), str):
+            project[field] = datetime.fromisoformat(project[field])
+    return ProjectResponse(**project)
+
+@api_router.put("/projects/{project_id}", response_model=ProjectResponse)
+async def update_project(project_id: str, data: ProjectUpdate, current_user: User = Depends(get_current_user)):
+    project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    if project["created_by"] != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes permisos para editar este proyecto")
+    update = data.model_dump(exclude_unset=True)
+    if "member_ids" in update:
+        update["members"] = [{"user_id": uid, "role": "member"} for uid in update.pop("member_ids")]
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.projects.update_one({"id": project_id}, {"$set": update})
+    updated = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    for field in ["created_at", "updated_at"]:
+        if isinstance(updated.get(field), str):
+            updated[field] = datetime.fromisoformat(updated[field])
+    return ProjectResponse(**updated)
+
+@api_router.delete("/projects/{project_id}")
+async def delete_project(project_id: str, current_user: User = Depends(get_current_active_admin)):
+    result = await db.projects.delete_one({"id": project_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    await db.tasks.delete_many({"project_id": project_id})
+    await db.project_errors.delete_many({"project_id": project_id})
+    await db.documentation.delete_many({"project_id": project_id})
+    await db.reports.delete_many({"project_id": project_id})
+    await db.files.delete_many({"project_id": project_id})
+    return {"message": "Proyecto eliminado"}
+
+# ============= RUTAS DE TAREAS =============
+
+@api_router.get("/projects/{project_id}/tasks", response_model=List[Task])
+async def get_tasks(project_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    tasks = await db.tasks.find({"project_id": project_id}, {"_id": 0}).to_list(100)
+    for t in tasks:
+        for field in ["created_at", "updated_at"]:
+            if isinstance(t.get(field), str):
+                t[field] = datetime.fromisoformat(t[field])
+    return tasks
+
+@api_router.post("/projects/{project_id}/tasks", response_model=Task)
+async def create_task(project_id: str, data: TaskCreate, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    task = Task(project_id=project_id, created_by=current_user.id, **data.model_dump())
+    doc = task.model_dump()
+    doc["created_at"] = doc["created_at"].isoformat()
+    doc["updated_at"] = doc["updated_at"].isoformat()
+    await db.tasks.insert_one(doc)
+    return task
+
+@api_router.put("/projects/{project_id}/tasks/{task_id}", response_model=Task)
+async def update_task(project_id: str, task_id: str, data: TaskUpdate, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    update = data.model_dump(exclude_unset=True)
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.tasks.update_one({"id": task_id, "project_id": project_id}, {"$set": update})
+    updated = await db.tasks.find_one({"id": task_id}, {"_id": 0})
+    for field in ["created_at", "updated_at"]:
+        if isinstance(updated.get(field), str):
+            updated[field] = datetime.fromisoformat(updated[field])
+    return Task(**updated)
+
+@api_router.delete("/projects/{project_id}/tasks/{task_id}")
+async def delete_task(project_id: str, task_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    await db.tasks.delete_one({"id": task_id, "project_id": project_id})
+    return {"message": "Tarea eliminada"}
+
+# ============= RUTAS DE ERRORES =============
+
+@api_router.get("/projects/{project_id}/errors", response_model=List[ProjectError])
+async def get_errors(project_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    errors = await db.project_errors.find({"project_id": project_id}, {"_id": 0}).to_list(100)
+    for e in errors:
+        for field in ["created_at", "updated_at"]:
+            if isinstance(e.get(field), str):
+                e[field] = datetime.fromisoformat(e[field])
+    return errors
+
+@api_router.post("/projects/{project_id}/errors", response_model=ProjectError)
+async def create_error(project_id: str, data: ProjectErrorCreate, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    error = ProjectError(project_id=project_id, created_by=current_user.id, **data.model_dump())
+    doc = error.model_dump()
+    doc["created_at"] = doc["created_at"].isoformat()
+    doc["updated_at"] = doc["updated_at"].isoformat()
+    await db.project_errors.insert_one(doc)
+    return error
+
+@api_router.put("/projects/{project_id}/errors/{error_id}", response_model=ProjectError)
+async def update_error(project_id: str, error_id: str, data: ProjectErrorUpdate, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    update = data.model_dump(exclude_unset=True)
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.project_errors.update_one({"id": error_id, "project_id": project_id}, {"$set": update})
+    updated = await db.project_errors.find_one({"id": error_id}, {"_id": 0})
+    for field in ["created_at", "updated_at"]:
+        if isinstance(updated.get(field), str):
+            updated[field] = datetime.fromisoformat(updated[field])
+    return ProjectError(**updated)
+
+@api_router.delete("/projects/{project_id}/errors/{error_id}")
+async def delete_error(project_id: str, error_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    await db.project_errors.delete_one({"id": error_id, "project_id": project_id})
+    return {"message": "Error eliminado"}
+
+# ============= RUTAS DE DOCUMENTACION =============
+
+@api_router.get("/projects/{project_id}/docs", response_model=List[Documentation])
+async def get_docs(project_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    docs = await db.documentation.find({"project_id": project_id}, {"_id": 0}).to_list(100)
+    for d in docs:
+        for field in ["created_at", "updated_at"]:
+            if isinstance(d.get(field), str):
+                d[field] = datetime.fromisoformat(d[field])
+    return docs
+
+@api_router.post("/projects/{project_id}/docs", response_model=Documentation)
+async def create_doc(project_id: str, data: DocumentationCreate, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    doc_obj = Documentation(project_id=project_id, created_by=current_user.id, **data.model_dump())
+    doc = doc_obj.model_dump()
+    doc["created_at"] = doc["created_at"].isoformat()
+    doc["updated_at"] = doc["updated_at"].isoformat()
+    await db.documentation.insert_one(doc)
+    return doc_obj
+
+@api_router.put("/projects/{project_id}/docs/{doc_id}", response_model=Documentation)
+async def update_doc(project_id: str, doc_id: str, data: DocumentationUpdate, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    update = data.model_dump(exclude_unset=True)
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.documentation.update_one({"id": doc_id, "project_id": project_id}, {"$set": update})
+    updated = await db.documentation.find_one({"id": doc_id}, {"_id": 0})
+    for field in ["created_at", "updated_at"]:
+        if isinstance(updated.get(field), str):
+            updated[field] = datetime.fromisoformat(updated[field])
+    return Documentation(**updated)
+
+@api_router.delete("/projects/{project_id}/docs/{doc_id}")
+async def delete_doc(project_id: str, doc_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    await db.documentation.delete_one({"id": doc_id, "project_id": project_id})
+    return {"message": "Documento eliminado"}
+
+# ============= RUTAS DE INFORMES =============
+
+@api_router.get("/projects/{project_id}/reports", response_model=List[Report])
+async def get_reports(project_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    reports = await db.reports.find({"project_id": project_id}, {"_id": 0}).to_list(100)
+    for r in reports:
+        if isinstance(r.get("created_at"), str):
+            r["created_at"] = datetime.fromisoformat(r["created_at"])
+    return reports
+
+@api_router.post("/projects/{project_id}/reports", response_model=Report)
+async def create_report(project_id: str, data: ReportCreate, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    if data.report_type == "auto":
+        project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+        tasks = await db.tasks.find({"project_id": project_id}, {"_id": 0}).to_list(100)
+        errors = await db.project_errors.find({"project_id": project_id}, {"_id": 0}).to_list(100)
+        docs = await db.documentation.find({"project_id": project_id}, {"_id": 0}).to_list(100)
+        tasks_pending = len([t for t in tasks if t["status"] == "pending"])
+        tasks_progress = len([t for t in tasks if t["status"] == "in_progress"])
+        tasks_done = len([t for t in tasks if t["status"] == "completed"])
+        errors_open = len([e for e in errors if e["status"] == "open"])
+        errors_resolved = len([e for e in errors if e["status"] == "resolved"])
+        content = f"""# Informe Automático: {project["name"]}
+
+## Descripción
+{project["description"]}
+
+## Estado del Proyecto
+Estado actual: {project["status"]}
+
+## Resumen de Tareas
+- Pendientes: {tasks_pending}
+- En progreso: {tasks_progress}
+- Completadas: {tasks_done}
+- Total: {len(tasks)}
+
+## Resumen de Errores
+- Abiertos: {errors_open}
+- Resueltos: {errors_resolved}
+- Total: {len(errors)}
+
+## Documentación
+- Documentos disponibles: {len(docs)}
+
+## Fecha de generación
+{datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M")} UTC
+"""
+        data.content = content
+    report = Report(project_id=project_id, created_by=current_user.id, **data.model_dump())
+    doc = report.model_dump()
+    doc["created_at"] = doc["created_at"].isoformat()
+    await db.reports.insert_one(doc)
+    return report
+
+@api_router.delete("/projects/{project_id}/reports/{report_id}")
+async def delete_report(project_id: str, report_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    await db.reports.delete_one({"id": report_id, "project_id": project_id})
+    return {"message": "Informe eliminado"}
+
+@api_router.get("/projects/{project_id}/reports/{report_id}/download/{format}")
+async def download_report(project_id: str, report_id: str, format: str, current_user: User = Depends(get_current_user)):
+    from fastapi.responses import StreamingResponse
+    import io
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    report = await db.reports.find_one({"id": report_id, "project_id": project_id}, {"_id": 0})
+    if not report:
+        raise HTTPException(status_code=404, detail="Informe no encontrado")
+    if format == "docx":
+        from docx import Document
+        from docx.shared import Pt, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        document = Document()
+        style = document.styles["Normal"]
+        style.font.name = "Arial"
+        style.font.size = Pt(11)
+        title = document.add_heading(report["title"], 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        for run in title.runs:
+            run.font.color.rgb = RGBColor(0x20, 0x5C, 0x00)
+        document.add_paragraph(f'Proyecto: {project_id}')
+        document.add_paragraph(f'Fecha: {report["created_at"]}')
+        document.add_paragraph("")
+        for line in report["content"].split("\n"):
+            if line.startswith("# "):
+                p = document.add_heading(line[2:], 1)
+                for run in p.runs:
+                    run.font.color.rgb = RGBColor(0x20, 0x5C, 0x00)
+            elif line.startswith("## "):
+                p = document.add_heading(line[3:], 2)
+                for run in p.runs:
+                    run.font.color.rgb = RGBColor(0x4A, 0x8C, 0x00)
+            elif line.startswith("- "):
+                document.add_paragraph(line[2:], style="List Bullet")
+            elif line.strip():
+                document.add_paragraph(line)
+        buffer = io.BytesIO()
+        document.save(buffer)
+        buffer.seek(0)
+        filename = f"{report['title'].replace(' ', '_')}.docx"
+        return StreamingResponse(
+            buffer,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    elif format == "pdf":
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.colors import HexColor
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+        from reportlab.lib.units import cm
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=2*cm, bottomMargin=2*cm)
+        styles = getSampleStyleSheet()
+        lime = HexColor("#cdff00")
+        dark = HexColor("#1a1a1a")
+        styles.add(ParagraphStyle(name="VapaTitle", fontSize=20, textColor=HexColor("#cdff00"), spaceAfter=12, fontName="Helvetica-Bold"))
+        styles.add(ParagraphStyle(name="VapaH1", fontSize=14, textColor=HexColor("#cdff00"), spaceAfter=8, fontName="Helvetica-Bold"))
+        styles.add(ParagraphStyle(name="VapaH2", fontSize=12, textColor=HexColor("#88cc00"), spaceAfter=6, fontName="Helvetica-Bold"))
+        styles.add(ParagraphStyle(name="VapaBody", fontSize=10, textColor=HexColor("#333333"), spaceAfter=4))
+        story = []
+        story.append(Paragraph(report["title"], styles["VapaTitle"]))
+        story.append(Spacer(1, 0.5*cm))
+        for line in report["content"].split("\n"):
+            if line.startswith("# "):
+                story.append(Paragraph(line[2:], styles["VapaH1"]))
+            elif line.startswith("## "):
+                story.append(Paragraph(line[3:], styles["VapaH2"]))
+            elif line.startswith("- "):
+                story.append(Paragraph(f"• {line[2:]}", styles["VapaBody"]))
+            elif line.strip():
+                story.append(Paragraph(line, styles["VapaBody"]))
+            else:
+                story.append(Spacer(1, 0.3*cm))
+        doc.build(story)
+        buffer.seek(0)
+        filename = f"{report['title'].replace(' ', '_')}.pdf"
+        return StreamingResponse(
+            buffer,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    else:
+        raise HTTPException(status_code=400, detail="Formato no soportado. Usa 'pdf' o 'docx'")
+
+# ============= RUTAS DE MIEMBROS =============
+
+@api_router.get("/projects/{project_id}/members")
+async def get_members(project_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    members = project.get("members", [])
+    result = []
+    for m in members:
+        user = await db.users.find_one({"id": m["user_id"]}, {"_id": 0})
+        if user:
+            result.append({"user_id": m["user_id"], "email": user["email"], "role": m.get("role", "member")})
+    return result
+
+@api_router.post("/projects/{project_id}/members")
+async def add_member(project_id: str, data: AddMemberRequest, current_user: User = Depends(get_current_user)):
+    project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    is_owner = project["created_by"] == current_user.id
+    is_manager = any(m["user_id"] == current_user.id and m.get("role") in ["owner", "manager"] for m in project.get("members", []))
+    if not is_owner and not is_manager and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes permisos para añadir miembros")
+    existing = any(m["user_id"] == data.user_id for m in project.get("members", []))
+    if existing:
+        raise HTTPException(status_code=400, detail="El usuario ya es miembro del proyecto")
+    await db.projects.update_one(
+        {"id": project_id},
+        {"$push": {"members": {"user_id": data.user_id, "role": data.role}}}
+    )
+    return {"message": "Miembro añadido"}
+
+@api_router.put("/projects/{project_id}/members/{user_id}")
+async def update_member_role(project_id: str, user_id: str, data: UpdateMemberRole, current_user: User = Depends(get_current_user)):
+    project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    is_owner = project["created_by"] == current_user.id
+    if not is_owner and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Solo el propietario o admin puede cambiar roles")
+    await db.projects.update_one(
+        {"id": project_id, "members.user_id": user_id},
+        {"$set": {"members.$.role": data.role}}
+    )
+    return {"message": "Rol actualizado"}
+
+@api_router.delete("/projects/{project_id}/members/{user_id}")
+async def remove_member(project_id: str, user_id: str, current_user: User = Depends(get_current_user)):
+    project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    is_owner = project["created_by"] == current_user.id
+    is_manager = any(m["user_id"] == current_user.id and m.get("role") in ["owner", "manager"] for m in project.get("members", []))
+    if not is_owner and not is_manager and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes permisos para eliminar miembros")
+    await db.projects.update_one(
+        {"id": project_id},
+        {"$pull": {"members": {"user_id": user_id}}}
+    )
+    return {"message": "Miembro eliminado"}
+
+@api_router.get("/projects/{project_id}/available-users")
+async def get_available_users(project_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    member_ids = [m["user_id"] for m in project.get("members", [])]
+    member_ids.append(project["created_by"])
+    all_users = await db.users.find({}, {"_id": 0}).to_list(100)
+    available = [{"id": u["id"], "email": u["email"]} for u in all_users if u["id"] not in member_ids]
+    return available
+
+
+# ============= RUTAS DE ARCHIVOS =============
+
+import shutil
+
+UPLOAD_DIR = "/app/uploads"
+
+@api_router.post("/projects/{project_id}/files")
+async def upload_file(project_id: str, file: UploadFile, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    os.makedirs(f"{UPLOAD_DIR}/{project_id}", exist_ok=True)
+    file_id = str(uuid.uuid4())
+    ext = os.path.splitext(file.filename)[1]
+    saved_name = f"{file_id}{ext}"
+    file_path = f"{UPLOAD_DIR}/{project_id}/{saved_name}"
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    file_size = os.path.getsize(file_path)
+    attachment = FileAttachment(
+        project_id=project_id,
+        filename=saved_name,
+        original_name=file.filename,
+        file_type=file.content_type,
+        file_size=file_size,
+        uploaded_by=current_user.id,
+        category=category
+    )
+    doc = attachment.model_dump()
+    doc["created_at"] = doc["created_at"].isoformat()
+    await db.files.insert_one(doc)
+    return {"id": attachment.id, "filename": file.filename, "size": file_size}
+
+@api_router.get("/projects/{project_id}/files")
+async def get_files(project_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    files = await db.files.find({"project_id": project_id}, {"_id": 0}).to_list(100)
+    for f in files:
+        if isinstance(f.get("created_at"), str):
+            f["created_at"] = datetime.fromisoformat(f["created_at"])
+    return files
+
+@api_router.get("/projects/{project_id}/files/{file_id}/download")
+async def download_file(project_id: str, file_id: str, current_user: User = Depends(get_current_user)):
+    from fastapi.responses import FileResponse
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    file_doc = await db.files.find_one({"id": file_id, "project_id": project_id}, {"_id": 0})
+    if not file_doc:
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+    file_path = f"{UPLOAD_DIR}/{project_id}/{file_doc['filename']}"
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Archivo no encontrado en disco")
+    return FileResponse(file_path, filename=file_doc["original_name"])
+
+@api_router.delete("/projects/{project_id}/files/{file_id}")
+async def delete_file(project_id: str, file_id: str, current_user: User = Depends(get_current_user)):
+    if not await check_project_member(project_id, current_user.id) and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="No tienes acceso a este proyecto")
+    file_doc = await db.files.find_one({"id": file_id, "project_id": project_id}, {"_id": 0})
+    if file_doc:
+        file_path = f"{UPLOAD_DIR}/{project_id}/{file_doc['filename']}"
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    await db.files.delete_one({"id": file_id, "project_id": project_id})
+    return {"message": "Archivo eliminado"}
+
+# Include router
+app.include_router(api_router)
+
+# Logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+@app.on_event("shutdown")
+async def shutdown_db_client():
+    client.close()
+

@@ -135,3 +135,130 @@ export const toolsAPI = {
     return response.data;
   }
 };
+
+export const projectsAPI = {
+  getProjects: async () => {
+    const response = await axios.get(`${API}/projects`, { headers: getAuthHeader() });
+    return response.data;
+  },
+  createProject: async (data) => {
+    const response = await axios.post(`${API}/projects`, data, { headers: getAuthHeader() });
+    return response.data;
+  },
+  getProject: async (id) => {
+    const response = await axios.get(`${API}/projects/${id}`, { headers: getAuthHeader() });
+    return response.data;
+  },
+  updateProject: async (id, data) => {
+    const response = await axios.put(`${API}/projects/${id}`, data, { headers: getAuthHeader() });
+    return response.data;
+  },
+  deleteProject: async (id) => {
+    const response = await axios.delete(`${API}/projects/${id}`, { headers: getAuthHeader() });
+    return response.data;
+  },
+  getTasks: async (projectId) => {
+    const response = await axios.get(`${API}/projects/${projectId}/tasks`, { headers: getAuthHeader() });
+    return response.data;
+  },
+  createTask: async (projectId, data) => {
+    const response = await axios.post(`${API}/projects/${projectId}/tasks`, data, { headers: getAuthHeader() });
+    return response.data;
+  },
+  updateTask: async (projectId, taskId, data) => {
+    const response = await axios.put(`${API}/projects/${projectId}/tasks/${taskId}`, data, { headers: getAuthHeader() });
+    return response.data;
+  },
+  deleteTask: async (projectId, taskId) => {
+    const response = await axios.delete(`${API}/projects/${projectId}/tasks/${taskId}`, { headers: getAuthHeader() });
+    return response.data;
+  },
+  getErrors: async (projectId) => {
+    const response = await axios.get(`${API}/projects/${projectId}/errors`, { headers: getAuthHeader() });
+    return response.data;
+  },
+  createError: async (projectId, data) => {
+    const response = await axios.post(`${API}/projects/${projectId}/errors`, data, { headers: getAuthHeader() });
+    return response.data;
+  },
+  updateError: async (projectId, errorId, data) => {
+    const response = await axios.put(`${API}/projects/${projectId}/errors/${errorId}`, data, { headers: getAuthHeader() });
+    return response.data;
+  },
+  deleteError: async (projectId, errorId) => {
+    const response = await axios.delete(`${API}/projects/${projectId}/errors/${errorId}`, { headers: getAuthHeader() });
+    return response.data;
+  },
+  getDocs: async (projectId) => {
+    const response = await axios.get(`${API}/projects/${projectId}/docs`, { headers: getAuthHeader() });
+    return response.data;
+  },
+  createDoc: async (projectId, data) => {
+    const response = await axios.post(`${API}/projects/${projectId}/docs`, data, { headers: getAuthHeader() });
+    return response.data;
+  },
+  updateDoc: async (projectId, docId, data) => {
+    const response = await axios.put(`${API}/projects/${projectId}/docs/${docId}`, data, { headers: getAuthHeader() });
+    return response.data;
+  },
+  deleteDoc: async (projectId, docId) => {
+    const response = await axios.delete(`${API}/projects/${projectId}/docs/${docId}`, { headers: getAuthHeader() });
+    return response.data;
+  },
+  getReports: async (projectId) => {
+    const response = await axios.get(`${API}/projects/${projectId}/reports`, { headers: getAuthHeader() });
+    return response.data;
+  },
+  createReport: async (projectId, data) => {
+    const response = await axios.post(`${API}/projects/${projectId}/reports`, data, { headers: getAuthHeader() });
+    return response.data;
+  },
+  deleteReport: async (projectId, reportId) => {
+    const response = await axios.delete(`${API}/projects/${projectId}/reports/${reportId}`, { headers: getAuthHeader() });
+    return response.data;
+  },
+  downloadReport: (projectId, reportId, format) => {
+    const token = localStorage.getItem('token');
+    window.open(`${API}/projects/${projectId}/reports/${reportId}/download/${format}?token=${token}`, '_blank');
+  },
+  getFiles: async (projectId) => {
+    const response = await axios.get(`${API}/projects/${projectId}/files`, { headers: getAuthHeader() });
+    return response.data;
+  },
+  uploadFile: async (projectId, file, category = "other") => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await axios.post(`${API}/projects/${projectId}/files?category=${category}`, formData, {
+      headers: { ...getAuthHeader(), 'Content-Type': 'multipart/form-data' }
+    });
+    return response.data;
+  },
+  getMembers: async (projectId) => {
+    const response = await axios.get(`${API}/projects/${projectId}/members`, { headers: getAuthHeader() });
+    return response.data;
+  },
+  addMember: async (projectId, user_id, role = "member") => {
+    const response = await axios.post(`${API}/projects/${projectId}/members`, { user_id, role }, { headers: getAuthHeader() });
+    return response.data;
+  },
+  updateMemberRole: async (projectId, userId, role) => {
+    const response = await axios.put(`${API}/projects/${projectId}/members/${userId}`, { role }, { headers: getAuthHeader() });
+    return response.data;
+  },
+  removeMember: async (projectId, userId) => {
+    const response = await axios.delete(`${API}/projects/${projectId}/members/${userId}`, { headers: getAuthHeader() });
+    return response.data;
+  },
+  getAvailableUsers: async (projectId) => {
+    const response = await axios.get(`${API}/projects/${projectId}/available-users`, { headers: getAuthHeader() });
+    return response.data;
+  },
+  deleteFile: async (projectId, fileId) => {
+    const response = await axios.delete(`${API}/projects/${projectId}/files/${fileId}`, { headers: getAuthHeader() });
+    return response.data;
+  },
+  downloadFile: (projectId, fileId) => {
+    const token = localStorage.getItem('token');
+    window.open(`${API}/projects/${projectId}/files/${fileId}/download?token=${token}`, '_blank');
+  }
+};

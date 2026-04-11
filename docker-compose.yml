@@ -26,6 +26,8 @@ services:
       - DB_NAME=vapa_production
       - CORS_ORIGINS=https://vapa.es
       - SECRET_KEY=${SECRET_KEY:-vapa-secret-key-change-in-production}
+    volumes:
+      - uploads_data:/app/uploads
     depends_on:
       - mongodb
     networks:
@@ -63,4 +65,6 @@ networks:
 
 volumes:
   mongodb_data:
+    driver: local
+  uploads_data:
     driver: local

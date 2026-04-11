@@ -17,6 +17,9 @@ const Navbar = () => {
             <Link to="/" className="text-lime-300 hover:text-lime-400 transition">Inicio</Link>
             <Link to="/herramientas" className="text-lime-300 hover:text-lime-400 transition">Herramientas</Link>
             <Link to="/blog" className="text-lime-300 hover:text-lime-400 transition">Blog</Link>
+            {user && (
+              <Link to="/proyectos" className="text-lime-300 hover:text-lime-400 transition">Proyectos</Link>
+            )}
             {user ? (
               <>
                 {isEditor() && (

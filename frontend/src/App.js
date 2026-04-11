@@ -10,6 +10,8 @@ import BlogListPage from "./pages/BlogListPage";
 import BlogPostPage from "./pages/BlogPostPage";
 import LoginPage from "./pages/LoginPage";
 import AdminPage from "./pages/AdminPage";
+import ProjectsPage from "./pages/ProjectsPage";
+import ProjectDetailPage from "./pages/ProjectDetailPage";
 
 function App() {
   return (
@@ -24,6 +26,8 @@ function App() {
             <Route path="/blog/:slug" element={<BlogPostPage />} />
             <Route path="/login" element={<LoginPage />} />
             <Route path="/admin" element={<AdminPage />} />
+            <Route path="/proyectos" element={<ProjectsPage />} />
+            <Route path="/proyectos/:id" element={<ProjectDetailPage />} />
           </Routes>
           <Footer />
         </div>
