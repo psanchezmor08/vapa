@@ -1382,17 +1382,24 @@ class AddMemberRequest(BaseModel):
 class UpdateMemberRole(BaseModel):
     role: str
 
+# ============= HELPERS DE PROYECTOS =============
+
+async def check_project_member(project_id: str, user_id: str) -> bool:
+    project = await db.projects.find_one({"id": project_id})
+    if not project:
+        return False
+    if project["created_by"] == user_id:
+        return True
+    return any(m["user_id"] == user_id for m in project.get("members", []))
+
+
 @api_router.get("/projects", response_model=List[ProjectResponse])
 async def get_projects(current_user: User = Depends(get_current_user)):
-    if current_user.role == "admin":
-        projects = await db.projects.find({}, {"_id": 0}).to_list(100)
-    else:
-        projects = await db.projects.find(
-            {"$or": [
-                {"created_by": current_user.id},
-                {"members": {"$elemMatch": {"user_id": current_user.id}}}
-            ]}, {"_id": 0}
-        ).to_list(100)
+    projects = await db.projects.find({}, {"_id": 0}).to_list(100)
+    if current_user.role != "admin":
+        projects = [p for p in projects if
+            p.get("created_by") == current_user.id or
+            any(m.get("user_id") == current_user.id for m in p.get("members", []))]
     result = []
     for p in projects:
         for field in ["created_at", "updated_at"]:
@@ -1909,15 +1916,11 @@ class UpdateMemberRole(BaseModel):
 
 @api_router.get("/projects", response_model=List[ProjectResponse])
 async def get_projects(current_user: User = Depends(get_current_user)):
-    if current_user.role == "admin":
-        projects = await db.projects.find({}, {"_id": 0}).to_list(100)
-    else:
-        projects = await db.projects.find(
-            {"$or": [
-                {"created_by": current_user.id},
-                {"members": {"$elemMatch": {"user_id": current_user.id}}}
-            ]}, {"_id": 0}
-        ).to_list(100)
+    projects = await db.projects.find({}, {"_id": 0}).to_list(100)
+    if current_user.role != "admin":
+        projects = [p for p in projects if
+            p.get("created_by") == current_user.id or
+            any(m.get("user_id") == current_user.id for m in p.get("members", []))]
     result = []
     for p in projects:
         for field in ["created_at", "updated_at"]:
